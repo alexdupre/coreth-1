@@ -42,10 +42,20 @@ import (
 	"github.com/flare-foundation/coreth/params"
 )
 
-var emptyCodeHash = crypto.Keccak256Hash(nil)
+var (
+	emptyCodeHash = crypto.Keccak256Hash(nil)
+
+	flareChainID    = new(big.Int).SetUint64(14) // https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-14.json
+	songbirdChainID = new(big.Int).SetUint64(19) // https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-19.json
+
+	flareStateConnectorActivationTime    = new(big.Int).SetUint64(1000000000000)
+	songbirdStateConnectorActivationTime = new(big.Int).SetUint64(1000000000000)
+
+	songbirdStateConnectorAddress = common.HexToAddress("0x6b5DEa84F71052c1302b5fe652e17FD442D126a9")
+)
 
 /*
-The State Transitioning Model
+StateTransition represents The State Transitioning Model
 
 A state transition is a change made when a transaction is applied to the current world state
 The state transitioning model does all the necessary work to work out a valid new state root.
@@ -62,17 +72,34 @@ The state transitioning model does all the necessary work to work out a valid ne
 6) Derive new state root
 */
 type StateTransition struct {
-	gp         *GasPool
-	msg        Message
-	gas        uint64
-	gasPrice   *big.Int
-	gasFeeCap  *big.Int
-	gasTipCap  *big.Int
-	initialGas uint64
-	value      *big.Int
-	data       []byte
-	state      vm.StateDB
-	evm        *vm.EVM
+	gp             *GasPool
+	msg            Message
+	gas            uint64
+	gasPrice       *big.Int
+	gasFeeCap      *big.Int
+	gasTipCap      *big.Int
+	initialGas     uint64
+	value          *big.Int
+	data           []byte
+	state          vm.StateDB
+	evm            *vm.EVM
+	stateConnector *stateConnector
+}
+
+// NewStateTransition initialises and returns a new state transition object.
+func NewStateTransition(evm *vm.EVM, msg Message, gp *GasPool) *StateTransition {
+	return &StateTransition{
+		gp:             gp,
+		evm:            evm,
+		msg:            msg,
+		gasPrice:       msg.GasPrice(),
+		gasFeeCap:      msg.GasFeeCap(),
+		gasTipCap:      msg.GasTipCap(),
+		value:          msg.Value(),
+		data:           msg.Data(),
+		state:          evm.StateDB,
+		stateConnector: newConnector(newStateConnectorCaller(evm), msg),
+	}
 }
 
 // Message represents a message sent to a contract.
@@ -183,21 +210,6 @@ func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation b
 		gas += uint64(accessList.StorageKeys()) * params.TxAccessListStorageKeyGas
 	}
 	return gas, nil
-}
-
-// NewStateTransition initialises and returns a new state transition object.
-func NewStateTransition(evm *vm.EVM, msg Message, gp *GasPool) *StateTransition {
-	return &StateTransition{
-		gp:        gp,
-		evm:       evm,
-		msg:       msg,
-		gasPrice:  msg.GasPrice(),
-		gasFeeCap: msg.GasFeeCap(),
-		gasTipCap: msg.GasTipCap(),
-		value:     msg.Value(),
-		data:      msg.Data(),
-		state:     evm.StateDB,
-	}
 }
 
 // ApplyMessage computes the new state by applying the given message
@@ -354,7 +366,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	timestamp = st.evm.Context.Time
 	burnAddress = st.evm.Context.Coinbase
 	if burnAddress != common.HexToAddress("0x0100000000000000000000000000000000000000") {
-		return nil, fmt.Errorf("Invalid value for block.coinbase")
+		return nil, fmt.Errorf("invalid value for block.coinbase")
 	}
 
 	if contractCreation {
@@ -363,14 +375,18 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value)
-		if vmerr == nil && *msg.To() == GetStateConnectorContract(chainID, timestamp) && len(st.data) >= 36 && len(ret) == 32 {
-			if GetStateConnectorActivated(chainID, timestamp) &&
-				bytes.Equal(st.data[0:4], SubmitAttestationSelector(chainID, timestamp)) &&
-				binary.BigEndian.Uint64(ret[24:32]) > 0 {
-				err = st.FinalisePreviousRound(chainID, timestamp, st.data[4:36])
-				if err != nil {
-					log.Warn("Error finalising state connector round", "error", err)
-				}
+		if vmerr == nil &&
+			*msg.To() == stateConnectorContract(chainID, timestamp) &&
+			len(st.data) >= 36 &&
+			len(ret) == 32 &&
+			isStateConnectorActivated(chainID, timestamp) &&
+			// 4 first bytes corresponds to the function name
+			bytes.Equal(st.data[0:4], submitAttestationSelector(chainID, timestamp)) &&
+			// determine whether this is read-only call
+			binary.BigEndian.Uint64(ret[24:32]) > 0 {
+			err = st.stateConnector.finalisePreviousRound(chainID, timestamp, st.data[4:36])
+			if err != nil {
+				log.Warn("error finalising state connector round", "error", err)
 			}
 		}
 	}
@@ -430,6 +446,39 @@ func (st *StateTransition) refundGas(apricotPhase1 bool) {
 	// Also return remaining gas to the block gas counter so it is
 	// available for the next transaction.
 	st.gp.AddGas(st.gas)
+}
+
+func stateConnectorContract(chainID *big.Int, blockTime *big.Int) common.Address {
+	switch {
+	case isStateConnectorActivated(chainID, blockTime) && chainID.Cmp(songbirdChainID) == 0:
+		return songbirdStateConnectorAddress
+	default:
+		return common.HexToAddress("0x1000000000000000000000000000000000000001")
+	}
+}
+
+func isStateConnectorActivated(chainID *big.Int, blockTime *big.Int) bool {
+	switch {
+	case isTestingChain(chainID):
+		return true
+	case chainID.Cmp(flareChainID) == 0:
+		return blockTime.Cmp(flareStateConnectorActivationTime) >= 0
+	case chainID.Cmp(songbirdChainID) == 0:
+		return blockTime.Cmp(songbirdStateConnectorActivationTime) >= 0
+	default:
+		return false
+	}
+}
+
+func isTestingChain(chainID *big.Int) bool {
+	return chainID.Cmp(flareChainID) != 0 && chainID.Cmp(songbirdChainID) != 0
+}
+
+func submitAttestationSelector(chainID *big.Int, blockTime *big.Int) []byte {
+	switch {
+	default:
+		return []byte{0xcf, 0xd1, 0xfd, 0xad}
+	}
 }
 
 // gasUsed returns the amount of gas used up by the state transition.
