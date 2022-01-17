@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -44,8 +45,8 @@ type mockStateConnectorCaller struct {
 
 func (m *mockStateConnectorCaller) Call(caller vm.ContractRef, addr common.Address, input []byte, gas uint64,
 	value *big.Int) (ret []byte, leftOverGas uint64, err error) {
-	switch m.testCase {
-	case "happy_path":
+	switch {
+	case m.testCase == "happy_path" || m.testCase == "finalized_data_error":
 		voter1 := common.BytesToHash([]byte("voter1"))
 		voter2 := common.BytesToHash([]byte("voter2"))
 		merkleRootHash := []byte("some_hash")
@@ -55,7 +56,6 @@ func (m *mockStateConnectorCaller) Call(caller vm.ContractRef, addr common.Addre
 				return []byte("voter"), 0, nil
 			}
 			if addr == common.BytesToAddress([]byte("voter")) {
-
 				return append([]byte{}, append(voter1.Bytes(), voter2.Bytes()...)...), 0, nil
 			}
 		}
@@ -64,40 +64,24 @@ func (m *mockStateConnectorCaller) Call(caller vm.ContractRef, addr common.Addre
 			return merkleRootHash, 0, nil
 		}
 		if caller == vm.AccountRef(stateConnectorCoinbaseSignalAddr(nil, nil)) {
-			return nil, 0, nil
+			if m.context.Coinbase != stateConnectorCoinbaseSignalAddr(nil, nil) {
+				return nil, 0, fmt.Errorf("invalid coinbase address: expected %v, got %v", stateConnectorCoinbaseSignalAddr(nil, nil), m.context.Coinbase)
+			}
+			if m.testCase == "happy_path" {
+				return nil, 0, nil
+			}
+			return nil, 0, errors.New("finalization error")
 		}
-	case "default_attestors_error_1":
+	case m.testCase == "default_attestors_error_1":
 		return nil, 0, errors.New("voter whitelister error")
-	case "default_attestors_error_2":
+	case m.testCase == "default_attestors_error_2":
 		switch addr {
 		case common.HexToAddress(GetPrioritisedFTSOContract(nil)):
 			return []byte("voter"), 0, nil
 		case common.BytesToAddress([]byte("voter")):
 			return nil, 0, errors.New("list price provider error")
 		}
-	case "finalized_data_error":
-		voter1 := common.BytesToHash([]byte("voter1"))
-		voter2 := common.BytesToHash([]byte("voter2"))
-		merkleRootHash := []byte("some_hash")
-
-		if caller == vm.AccountRef(m.msg.From()) {
-			if addr == common.HexToAddress(GetPrioritisedFTSOContract(nil)) {
-				return []byte("voter"), 0, nil
-			}
-			if addr == common.BytesToAddress([]byte("voter")) {
-
-				return append([]byte{}, append(voter1.Bytes(), voter2.Bytes()...)...), 0, nil
-			}
-		}
-		if caller == vm.AccountRef(common.BytesToAddress(voter1.Bytes())) ||
-			caller == vm.AccountRef(common.BytesToAddress(voter2.Bytes())) {
-			return merkleRootHash, 0, nil
-		}
-		if caller == vm.AccountRef(stateConnectorCoinbaseSignalAddr(nil, nil)) {
-			return nil, 0, errors.New("finalization error")
-		}
 	}
-
 	return nil, 0, errors.New("undefined test case")
 }
 
@@ -113,11 +97,15 @@ func TestStateTransition_FinalisePreviousRound(t *testing.T) {
 		mockSCC := &mockStateConnectorCaller{
 			testCase: "happy_path",
 			msg:      mockMsg,
+			context: vm.BlockContext{
+				Coinbase: common.BigToAddress(big.NewInt(1000)),
+			},
 		}
 		c := newConnector(mockSCC, mockMsg)
 		currentRoundNumber := []byte("222")
 		err := c.finalisePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
 		assert.NoError(t, err)
+		assert.Equal(t, common.BigToAddress(big.NewInt(1000)), mockSCC.context.Coinbase, "coinbase address should be changed to the original address")
 	})
 	t.Run("default_attestors_error_1", func(t *testing.T) {
 		mockMsg := &mockMessage{
@@ -160,6 +148,6 @@ func TestStateTransition_FinalisePreviousRound(t *testing.T) {
 		currentRoundNumber := []byte("222")
 		err := c.finalisePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
 		assert.EqualError(t, err, "finalization error")
+		assert.Equal(t, common.BigToAddress(big.NewInt(1000)), mockSCC.context.Coinbase, "coinbase address should be changed to the original address")
 	})
-
 }
