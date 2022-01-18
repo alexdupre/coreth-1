@@ -52,6 +52,7 @@ var (
 	songbirdStateConnectorActivationTime = new(big.Int).SetUint64(1000000000000)
 
 	songbirdStateConnectorAddress = common.HexToAddress("0x6b5DEa84F71052c1302b5fe652e17FD442D126a9")
+	defaultStateConnectorAddress  = common.HexToAddress("0x1000000000000000000000000000000000000001")
 )
 
 /*
@@ -384,7 +385,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 			bytes.Equal(st.data[0:4], submitAttestationSelector(chainID, timestamp)) &&
 			// determine whether this is read-only call
 			binary.BigEndian.Uint64(ret[24:32]) > 0 {
-			err = st.stateConnector.finalisePreviousRound(chainID, timestamp, st.data[4:36])
+			err = st.stateConnector.finalizePreviousRound(chainID, timestamp, st.data[4:36])
 			if err != nil {
 				log.Warn("error finalising state connector round", "error", err)
 			}
@@ -453,7 +454,7 @@ func stateConnectorContract(chainID *big.Int, blockTime *big.Int) common.Address
 	case isStateConnectorActivated(chainID, blockTime) && chainID.Cmp(songbirdChainID) == 0:
 		return songbirdStateConnectorAddress
 	default:
-		return common.HexToAddress("0x1000000000000000000000000000000000000001")
+		return defaultStateConnectorAddress
 	}
 }
 
@@ -475,10 +476,7 @@ func isTestingChain(chainID *big.Int) bool {
 }
 
 func submitAttestationSelector(chainID *big.Int, blockTime *big.Int) []byte {
-	switch {
-	default:
-		return []byte{0xcf, 0xd1, 0xfd, 0xad}
-	}
+	return []byte{0xcf, 0xd1, 0xfd, 0xad}
 }
 
 // gasUsed returns the amount of gas used up by the state transition.

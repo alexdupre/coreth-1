@@ -6,9 +6,9 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/flare-foundation/coreth/core/types"
 	"github.com/flare-foundation/coreth/core/vm"
 )
@@ -63,9 +63,9 @@ func (m *mockStateConnectorCaller) Call(caller vm.ContractRef, addr common.Addre
 			caller == vm.AccountRef(common.BytesToAddress(voter2.Bytes())) {
 			return merkleRootHash, 0, nil
 		}
-		if caller == vm.AccountRef(stateConnectorCoinbaseSignalAddr(nil, nil)) {
-			if m.context.Coinbase != stateConnectorCoinbaseSignalAddr(nil, nil) {
-				return nil, 0, fmt.Errorf("invalid coinbase address: expected %v, got %v", stateConnectorCoinbaseSignalAddr(nil, nil), m.context.Coinbase)
+		if caller == vm.AccountRef(stateConnectorCoinbaseSignalAddr) {
+			if m.context.Coinbase != stateConnectorCoinbaseSignalAddr {
+				return nil, 0, fmt.Errorf("invalid coinbase address: expected %v, got %v", stateConnectorCoinbaseSignalAddr, m.context.Coinbase)
 			}
 			if m.testCase == "happy_path" {
 				return nil, 0, nil
@@ -103,7 +103,7 @@ func TestStateTransition_FinalisePreviousRound(t *testing.T) {
 		}
 		c := newConnector(mockSCC, mockMsg)
 		currentRoundNumber := []byte("222")
-		err := c.finalisePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
+		err := c.finalizePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
 		assert.NoError(t, err)
 		assert.Equal(t, common.BigToAddress(big.NewInt(1000)), mockSCC.context.Coinbase, "coinbase address should be changed to the original address")
 	})
@@ -117,7 +117,7 @@ func TestStateTransition_FinalisePreviousRound(t *testing.T) {
 		}
 		c := newConnector(mockSCC, mockMsg)
 		currentRoundNumber := []byte("222")
-		err := c.finalisePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
+		err := c.finalizePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
 		assert.EqualError(t, err, "failed to get VoterWhitelister contract: voter whitelister error")
 	})
 	t.Run("default_attestors_error_2", func(t *testing.T) {
@@ -130,7 +130,7 @@ func TestStateTransition_FinalisePreviousRound(t *testing.T) {
 		}
 		c := newConnector(mockSCC, mockMsg)
 		currentRoundNumber := []byte("222")
-		err := c.finalisePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
+		err := c.finalizePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
 		assert.EqualError(t, err, "failed to get FTSO price providers: list price provider error")
 	})
 	t.Run("finalized_data_error", func(t *testing.T) {
@@ -146,7 +146,7 @@ func TestStateTransition_FinalisePreviousRound(t *testing.T) {
 		}
 		c := newConnector(mockSCC, mockMsg)
 		currentRoundNumber := []byte("222")
-		err := c.finalisePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
+		err := c.finalizePreviousRound(big.NewInt(10), big.NewInt(10), currentRoundNumber)
 		assert.EqualError(t, err, "finalization error")
 		assert.Equal(t, common.BigToAddress(big.NewInt(1000)), mockSCC.context.Coinbase, "coinbase address should be changed to the original address")
 	})
