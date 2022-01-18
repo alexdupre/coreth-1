@@ -15,9 +15,7 @@ import (
 	"github.com/flare-foundation/coreth/core/vm"
 )
 
-const (
-	envLocalAttestationProviders = "LOCAL_ATTESTATION_PROVIDERS"
-)
+const envLocalAttestationProviders = "LOCAL_ATTESTATION_PROVIDERS"
 
 var stateConnectorCoinbaseSignalAddr = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
@@ -173,6 +171,19 @@ func (c *stateConnector) attestationResult(attestor common.Address, instructions
 	return hex.EncodeToString(rootHash), err
 }
 
+func localAttestors() []common.Address {
+	envAttestationProvidersString := os.Getenv(envLocalAttestationProviders)
+	if envAttestationProvidersString == "" {
+		return nil
+	}
+	envAttestationProviders := strings.Split(envAttestationProvidersString, ",")
+	attestors := make([]common.Address, len(envAttestationProviders))
+	for i := range envAttestationProviders {
+		attestors[i] = common.HexToAddress(envAttestationProviders[i])
+	}
+	return attestors
+}
+
 // to returns the recipient of the message.
 func (c *stateConnector) to() common.Address {
 	// empty message or receiver means contract creation
@@ -196,17 +207,4 @@ func voterWhitelisterSelector(chainID *big.Int, blockTime *big.Int) []byte {
 
 func ftsoWhitelistedPriceProvidersSelector(chainID *big.Int, blockTime *big.Int) []byte {
 	return []byte{0x09, 0xfc, 0xb4, 0x00}
-}
-
-func localAttestors() []common.Address {
-	envAttestationProvidersString := os.Getenv(envLocalAttestationProviders)
-	if envAttestationProvidersString == "" {
-		return nil
-	}
-	envAttestationProviders := strings.Split(envAttestationProvidersString, ",")
-	attestors := make([]common.Address, len(envAttestationProviders))
-	for i := range envAttestationProviders {
-		attestors[i] = common.HexToAddress(envAttestationProviders[i])
-	}
-	return attestors
 }
