@@ -358,12 +358,10 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	var (
 		ret         []byte
 		vmerr       error // vm errors do not affect consensus and are therefore not assigned to err
-		chainID     *big.Int
 		timestamp   *big.Int
 		burnAddress common.Address
 	)
 
-	chainID = st.evm.ChainConfig().ChainID
 	timestamp = st.evm.Context.Time
 	burnAddress = st.evm.Context.Coinbase
 	if burnAddress != common.HexToAddress("0x0100000000000000000000000000000000000000") {
@@ -376,15 +374,9 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value)
-		if vmerr == nil &&
-			*msg.To() == stateConnectorContract(chainID, timestamp) &&
-			len(st.data) >= 36 &&
-			len(ret) == 32 &&
-			isStateConnectorActivated(chainID, timestamp) &&
-			// 4 first bytes corresponds to the function name
-			bytes.Equal(st.data[0:4], submitAttestationSelector(chainID, timestamp)) &&
-			// determine whether this is read-only call
-			binary.BigEndian.Uint64(ret[24:32]) > 0 {
+
+		if vmerr == nil && st.shouldFinalize(ret) {
+			chainID := st.evm.ChainConfig().ChainID
 			err = st.stateConnector.finalizePreviousRound(chainID, timestamp, st.data[4:36])
 			if err != nil {
 				log.Warn("error finalising state connector round", "error", err)
@@ -447,6 +439,26 @@ func (st *StateTransition) refundGas(apricotPhase1 bool) {
 	// Also return remaining gas to the block gas counter so it is
 	// available for the next transaction.
 	st.gp.AddGas(st.gas)
+}
+
+func (st *StateTransition) shouldFinalize(ret []byte) bool {
+	chainID := st.evm.ChainConfig().ChainID
+	timestamp := st.evm.Context.Time
+	switch {
+	case st.to() != stateConnectorContract(chainID, timestamp):
+		return false
+	case len(st.data) < 36:
+		return false
+	case len(ret) != 32:
+		return false
+	case !isStateConnectorActivated(chainID, timestamp):
+		return false
+	case !bytes.Equal(st.data[0:4], submitAttestationSelector(chainID, timestamp)): // 4 first bytes corresponds to the function name
+		return false
+	case binary.BigEndian.Uint64(ret[24:32]) == 0: // determine whether this is read-only call
+		return false
+	}
+	return true
 }
 
 func stateConnectorContract(chainID *big.Int, blockTime *big.Int) common.Address {

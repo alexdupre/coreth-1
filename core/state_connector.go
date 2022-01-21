@@ -79,7 +79,7 @@ func (c *stateConnector) finalizePreviousRound(chainID, timestamp *big.Int, curr
 	finalizedData = append(finalizedData[:], merkleRootHashBytes[:]...)
 	bc := c.caller.BlockContext()
 
-	// FIXME add a comment why are we swapping the coinbase address
+	// switch the address to be able to call the finalized function
 	originalBC := bc
 	defer func() {
 		c.caller.WithBlockContext(originalBC)
